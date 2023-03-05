@@ -74,6 +74,12 @@ main( int argc, char** argv)
     return EXIT_SUCCESS;
 }
 
+void printing(float* hist, int num) {
+  for(int i = 0; i < num; i++) {
+    printf("%d : %f\n", i, *(hist + i));
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //! Run a scan test for CUDA
 ////////////////////////////////////////////////////////////////////////////////
@@ -179,7 +185,12 @@ runTest( int argc, char** argv)
     printf("Host CPU Processing time: %f (ms)\n", cutGetTimerValue(timer));
     host_time = cutGetTimerValue(timer);
     CUT_SAFE_CALL(cutDeleteTimer(timer));
-
+    
+    printf("h_data:\n");
+    printing(h_data, num_elements);
+    printf("\nreference:\n");
+    printing(reference, num_elements);
+    
     // **===-------- Lab4: Allocate data structure here -----------===**
     // allocate device memory input and output arrays
     float* d_idata = NULL;
@@ -220,6 +231,9 @@ runTest( int argc, char** argv)
     // copy result from device to host
     CUDA_SAFE_CALL(cudaMemcpy( h_data, d_odata, sizeof(float) * num_elements, 
                                cudaMemcpyDeviceToHost));
+    
+    printf("\nours:\n");                   
+    printing(h_data, num_elements);
 
     if ((argc - 1) == 3)  // Three Arguments, write result to file
     {
