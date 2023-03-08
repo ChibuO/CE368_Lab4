@@ -1,6 +1,6 @@
 #ifndef _PRESCAN_CU_
 #define _PRESCAN_CU_
-
+#define BANK_CONFLICTS (DEFAULT_NUM_ELEMENTS%NUM_BANKS)
 // includes, kernels
 #include <assert.h>
 
@@ -9,8 +9,14 @@
 #define LOG_NUM_BANKS 5
 // Lab4: You can use any other block size you wish.
 #define BLOCK_SIZE 256
+
+#if BANK_CONFLICTS > 0
 #define CONFLICT_FREE_OFFSET(n) \
   ((n) >> NUM_BANKS + (n) >> (2 * LOG_NUM_BANKS)) 
+
+#else 
+#define CONFLICT_FREE_OFFSET(n) ((n) >> LOG_NUM_BANKS)
+#endif
 // Lab4: Host Helper Functions (allocate your own data structure...)
 
 
@@ -20,6 +26,8 @@
 // Lab4: Kernel Functions
 __global__ void naiveScan(float *g_odata, float *g_idata, int n);
 __global__ void sweepScan(float *g_odata, float *g_idata, int n);
+__global__ void BKung(float *g_odata, float *g_idata, int n);
+__global__ void CoarseBKung(float *g_odata, float *g_idata, int n);
 
 
 __global__ void simp(float *g_odata, float *g_idata, int n) {
@@ -91,13 +99,15 @@ __global__ void simp(float *g_odata, float *g_idata, int n) {
 // function in this file, and then call them from here.
 void prescanArray(float *outArray, float *inArray, int numElements) {
   
-  dim3 dimGrid(6, 6, 1);
-	dim3 dimBlock(numElements, 4, 1);
+  dim3 dimGrid(numElements/1024, 1, 1);
+	dim3 dimBlock(1024, 1, 1);
 
 	// Launch the device computation threads!
-  //naiveScan<<<dimGrid, dimBlock, 2*numElements>>>(outArray, inArray, numElements);
+  //naiveScan<<<dimGrid, dimBlock, sizeof(float)*2*numElements>>>(outArray, inArray, numElements);
+  //CoarseBKung<<<dimGrid, dimBlock, sizeof(float)*numElements>>>(outArray, inArray, numElements);
+  BKung<<<dimGrid, dimBlock, sizeof(float)*numElements>>>(outArray, inArray, numElements);
   //sweepScan<<<dimGrid, dimBlock, 2*numElements>>>(outArray, inArray, numElements);
-  //simp<<<dimGrid, dimBlock, 2*numElements>>>(outArray, inArray, numElements);
+  //simp<<<dimGrid, dimBlock, sizeof(float)*2*numElements>>>(outArray, inArray, numElements);
 }
 // **===-----------------------------------------------------------===**
 
@@ -189,5 +199,93 @@ __global__ void naiveScan(float *g_odata, float *g_idata, int n) {
   g_odata[tid] = temp[buffer1*n+tid]; // write output
   
 }
+
+__global__ void BKung(float *g_odata, float *g_idata, int n){
+
+  extern __shared__ float XY[];
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;//global thread ID number
+
+  
+  unsigned int i = 2*tid;//1 3 5 7
+  if (tid == 0) XY[tid] = 0;//add identity value to first element using the 0th thread
+  
+  if (i < n){ 
+    XY[i+1] = g_idata[i]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
+    //XY[i+1] = g_idata[i]; // 2 = 1    4 = 3     6 = 5          8 = 7
+  }
+  if (i+2 < n){ 
+    XY[i+2] = g_idata[i + 1]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
+  }
+  
+  for(unsigned int stride = 1; stride <= n/2; stride*=2){
+    __syncthreads();
+    unsigned int index = ((tid+1)*2*stride);
+    if(index < n){
+      XY[index] += XY[index-stride];
+    }
+  }
+  for (int stride = n/4; stride > 0; stride /= 2){
+    __syncthreads();
+    unsigned int index = ((tid+1)*stride*2);
+    if(index + stride < n){
+      XY[index + stride] += XY[index];
+    }
+  }
+  if (i < n){
+    g_odata[i] = XY[i];
+  }
+  if (i+1< n){
+    g_odata[i+1] = XY[i+1];
+  }
+
+}
+
+
+__global__ void CoarseBKung(float *g_odata, float *g_idata, int n){
+
+  extern __shared__ float XY[];
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;//global thread ID number
+
+  
+  unsigned int i = 8*tid;//1 3 5 7
+  if (tid == 0) XY[tid] = 0;//add identity value to first element using the 0th thread
+  
+  /*if (i < n){ 
+    XY[i+1] = g_idata[i]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
+    //XY[i+1] = g_idata[i]; // 2 = 1    4 = 3     6 = 5          8 = 7
+  }
+  if (i+2 < n){ 
+    XY[i+2] = g_idata[i + 1]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
+  }*/
+  if(i+8 < n){
+    for (int t=0; t<8; t++){
+      XY[i+t+1] = g_idata[i+t];
+    }
+  }
+
+
+  for(unsigned int stride = 1; stride <= n/2; stride*=2){
+    __syncthreads();
+    unsigned int index = ((tid+1)*2*stride);
+    if(index < n){
+      XY[index] += XY[index-stride];
+    }
+  }
+  for (int stride = n/4; stride > 0; stride /= 2){
+    __syncthreads();
+    unsigned int index = ((tid+1)*stride*2);
+    if(index + stride < n){
+      XY[index + stride] += XY[index];
+    }
+  }
+  if (i < n){
+    g_odata[i] = XY[i];
+  }
+  if (i+1< n){
+    g_odata[i+1] = XY[i+1];
+  }
+
+}
+
 
 #endif // _PRESCAN_CU_
