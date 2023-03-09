@@ -26,7 +26,7 @@
 // Lab4: Kernel Functions
 __global__ void naiveScan(float *g_odata, float *g_idata, int n);
 __global__ void sweepScan(float *g_odata, float *g_idata, int n);
-__global__ void BKung(float *g_odata, float *g_idata, int n);
+__global__ void BKung(float *g_odata, float *g_idata);
 __global__ void CoarseBKung(float *g_odata, float *g_idata, int n);
 
 
@@ -98,14 +98,14 @@ __global__ void simp(float *g_odata, float *g_idata, int n) {
 // You may need to make multiple kernel calls, make your own kernel
 // function in this file, and then call them from here.
 void prescanArray(float *outArray, float *inArray, int numElements) {
-  
-  dim3 dimGrid(numElements/1024, 1, 1);
-	dim3 dimBlock(1024, 1, 1);
+  int numthrd = 1024;
+  dim3 dimGrid(ceil(numElements/(numthrd*2)), 1, 1);
+	dim3 dimBlock(numthrd, 1, 1);
 
 	// Launch the device computation threads!
   //naiveScan<<<dimGrid, dimBlock, sizeof(float)*2*numElements>>>(outArray, inArray, numElements);
   //CoarseBKung<<<dimGrid, dimBlock, sizeof(float)*numElements>>>(outArray, inArray, numElements);
-  BKung<<<dimGrid, dimBlock, sizeof(float)*numElements>>>(outArray, inArray, numElements);
+  BKung<<<dimGrid, dimBlock, sizeof(float)*numthrd*2>>>(outArray, inArray);
   //sweepScan<<<dimGrid, dimBlock, 2*numElements>>>(outArray, inArray, numElements);
   //simp<<<dimGrid, dimBlock, sizeof(float)*2*numElements>>>(outArray, inArray, numElements);
 }
@@ -200,42 +200,72 @@ __global__ void naiveScan(float *g_odata, float *g_idata, int n) {
   
 }
 
-__global__ void BKung(float *g_odata, float *g_idata, int n){
+__global__ void BKung(float *g_odata, float *g_idata){
 
   extern __shared__ float XY[];
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;//global thread ID number
-
-  
-  unsigned int i = 2*tid;//1 3 5 7
-  if (tid == 0) XY[tid] = 0;//add identity value to first element using the 0th thread
-  
-  if (i < n){ 
-    XY[i+1] = g_idata[i]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
-    //XY[i+1] = g_idata[i]; // 2 = 1    4 = 3     6 = 5          8 = 7
+  int tid = threadIdx.x; //local block thread ID
+  int gtid = tid; //global thread id so we can index input array at the right location in global memory
+  if(blockIdx.x != 0){
+    gtid += blockIdx.x * blockDim.x * 2;//global thread ID number for the non-0th block
   }
-  if (i+2 < n){ 
-    XY[i+2] = g_idata[i + 1]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
-  }
+  int lim = (blockIdx.x+1)*blockDim.x*2;//will help keep the block within bounds fom global input array
+  int i = 2*tid;//1 3 5 7
+  int gi = gtid+blockDim.x;
   
-  for(unsigned int stride = 1; stride <= n/2; stride*=2){
-    __syncthreads();
-    unsigned int index = ((tid+1)*2*stride);
-    if(index < n){
-      XY[index] += XY[index-stride];
+  if(blockIdx.x == 0){
+    if (tid == 0){ 
+      XY[tid] = 0;//add identity value to first element using the 0th thread
+    }
+    if (tid+1 < blockDim.x*2){ 
+      XY[tid+1] = g_idata[gtid]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
+    }
+    if (tid+blockDim.x+1 < blockDim.x*2){ 
+      XY[tid+1+blockDim.x] = g_idata[gi]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
+    }
+    for(int stride = 1; stride <= blockDim.x; stride*=2){
+      __syncthreads();
+      int index = ((tid+1)*2*stride);
+      if(index < blockDim.x*2){
+        XY[index] += XY[index-stride];
+      }
+    }
+    for (int stride = blockDim.x/2; stride > 0; stride /= 2){
+      __syncthreads();
+      int index = ((tid+1)*stride*2);
+      if(index + stride < blockDim.x*2){
+        XY[index + stride] += XY[index];
+      }
     }
   }
-  for (int stride = n/4; stride > 0; stride /= 2){
-    __syncthreads();
-    unsigned int index = ((tid+1)*stride*2);
-    if(index + stride < n){
-      XY[index + stride] += XY[index];
+  else{
+    if ((tid < blockDim.x*2) && (gtid < lim)){ 
+      XY[tid] = g_idata[gtid-1]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
+    }
+    if ((tid+blockDim.x+1 < blockDim.x*2) && (gi<lim)){ 
+      XY[tid+blockDim.x+1] = g_idata[gi-1]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
+    }
+    for(int stride = 1; stride <= blockDim.x; stride*=2){
+      __syncthreads();
+      int index = ((tid+1)*2*stride-1);
+      if(index < blockDim.x*2){
+        XY[index] += XY[index-stride];
+      }
+    }
+    for (int stride = blockDim.x/2; stride > 0; stride /= 2){
+      __syncthreads();
+      int index = ((tid+1)*stride*2-1);
+      if(index + stride < blockDim.x*2){
+        XY[index + stride] += XY[index];
+      }
     }
   }
-  if (i < n){
-    g_odata[i] = XY[i];
+  __syncthreads();
+  
+  if (i < blockDim.x*2){
+    g_odata[gtid] = XY[tid];
   }
-  if (i+1< n){
-    g_odata[i+1] = XY[i+1];
+  if (i+1< blockDim.x*2){
+    g_odata[gi] = XY[tid+blockDim.x];
   }
 
 }
