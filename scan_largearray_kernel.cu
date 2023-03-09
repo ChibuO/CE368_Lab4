@@ -26,7 +26,7 @@
 // Lab4: Kernel Functions
 __global__ void naiveScan(float *g_odata, float *g_idata, int n);
 __global__ void sweepScan(float *g_odata, float *g_idata, int n);
-__global__ void BKung(float *g_odata, float *g_idata);
+__global__ void BKung(float *g_odata, float *g_idata, int numel);
 __global__ void CoarseBKung(float *g_odata, float *g_idata, int n);
 
 
@@ -105,7 +105,7 @@ void prescanArray(float *outArray, float *inArray, int numElements) {
 	// Launch the device computation threads!
   //naiveScan<<<dimGrid, dimBlock, sizeof(float)*2*numElements>>>(outArray, inArray, numElements);
   //CoarseBKung<<<dimGrid, dimBlock, sizeof(float)*numElements>>>(outArray, inArray, numElements);
-  BKung<<<dimGrid, dimBlock, sizeof(float)*numthrd*2>>>(outArray, inArray);
+  BKung<<<dimGrid, dimBlock, sizeof(float)*numthrd*2>>>(outArray, inArray, numElements);
   //sweepScan<<<dimGrid, dimBlock, 2*numElements>>>(outArray, inArray, numElements);
   //simp<<<dimGrid, dimBlock, sizeof(float)*2*numElements>>>(outArray, inArray, numElements);
 }
@@ -200,7 +200,7 @@ __global__ void naiveScan(float *g_odata, float *g_idata, int n) {
   
 }
 
-__global__ void BKung(float *g_odata, float *g_idata){
+__global__ void BKung(float *g_odata, float *g_idata, int numel){
 
   extern __shared__ float XY[];
   int tid = threadIdx.x; //local block thread ID
@@ -239,10 +239,20 @@ __global__ void BKung(float *g_odata, float *g_idata){
   }
   else{
     if ((tid < blockDim.x*2) && (gtid < lim)){ 
-      XY[tid] = g_idata[gtid-1]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
+      if (gtid<numel){
+        XY[tid] = g_idata[gtid-1]; //  1 = 0    3 = 2     5 = 4          7 = 6//copy every other value of the even elements of the input array 
+      }
+      else{
+        XY[tid] = 0;
+      }
     }
     if ((tid+blockDim.x+1 < blockDim.x*2) && (gi<lim)){ 
-      XY[tid+blockDim.x+1] = g_idata[gi-1]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
+      if(gtid<numel){
+        XY[tid+blockDim.x+1] = g_idata[gi-1]; // 2 = 1    4 = 3     6 = 5          XXXX 8 = 7 //copy every other value of the od elements of the input array
+      }
+      else{
+        XY[tid+blockDim.x+1] = 0;
+      }
     }
     for(int stride = 1; stride <= blockDim.x; stride*=2){
       __syncthreads();
